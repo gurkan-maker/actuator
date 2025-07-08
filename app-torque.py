@@ -25,6 +25,7 @@ MM_TO_INCH = 0.0393701
 N_TO_LBF = 0.224809
 NM_TO_LBIN = 8.85075
 KW_TO_HP = 1.34102
+LBF_TO_N = 1 / N_TO_LBF  # Conversion from lbf to N
 
 # Valve types
 VALVE_TYPES = {
@@ -50,6 +51,27 @@ SEAL_FRICTION = {
     "Metal": 0.15,
     "Elastomer": 0.08
 }
+
+# Valve factors (from GSL-Actuator-sizing-calculation.pdf)
+VALVE_FACTORS = {
+    "Globe": {
+        "Liquid": {"Below 400°C": 1.15, "Above 400°C": 1.15},
+        "Gas/Steam": {"Below 400°C": 1.15, "Above 400°C": 1.15}
+    },
+    "Gate": {
+        "Solid Wedge": {
+            "Liquid": {"Below 400°C": 0.35, "Above 400°C": 0.4},
+            "Gas/Steam": {"Below 400°C": 0.45, "Above 400°C": 0.5}
+        },
+        "Flexible Wedge": {
+            "Liquid": {"Below 400°C": 0.28, "Above 400°C": 0.3},
+            "Gas/Steam": {"Below 400°C": 0.35, "Above 400°C": 0.45}
+        }
+    }
+}
+
+# Media types
+MEDIA_TYPES = ["Liquid", "Gas/Steam"]
 
 # ========================
 # VALVE DATABASE
@@ -164,56 +186,81 @@ def calculate_butterfly_valve_torque(valve, pressure_bar, temperature_c):
     
     return base_torque * temp_factor * seat_factor
 
-def calculate_globe_valve_thrust(valve, pressure_bar, temperature_c):
-    """Calculate thrust for globe valves"""
-    # Differential pressure force
-    area = valve.get_area()
-    dp_force = area * pressure_bar * 100000  # N
+def get_valve_factor(valve_type, media_type, temperature_c, gate_type=None):
+    """Get valve factor C based on valve type, media, and temperature"""
+    temp_category = "Above 400°C" if temperature_c > 400 else "Below 400°C"
     
-    # Packing friction force
-    stem_area = math.pi * (valve.stem_dia_mm / 1000 / 2)**2
-    packing_force = stem_area * pressure_bar * 100000 * valve.get_seal_friction()
-    
-    # Seat load force (empirical)
-    seat_force = valve.size * 1000
-    
-    # Temperature factor
-    temp_factor = 1.0
-    if temperature_c > 150:
-        temp_factor = 1.0 + (temperature_c - 150) * 0.002
-    
-    return (dp_force + packing_force + seat_force) * temp_factor
+    if valve_type == "Globe":
+        return VALVE_FACTORS["Globe"][media_type][temp_category]
+    elif valve_type == "Gate":
+        if not gate_type:
+            gate_type = "Solid Wedge"  # Default if not specified
+        return VALVE_FACTORS["Gate"][gate_type][media_type][temp_category]
+    return 1.0  # Default factor for other types
 
-def calculate_gate_valve_thrust(valve, pressure_bar, temperature_c):
-    """Calculate thrust for gate valves"""
-    # Differential pressure force
-    area = valve.get_area()
-    dp_force = area * pressure_bar * 100000  # N
+def calculate_gate_valve_thrust(valve, pressure_bar, temperature_c, media_type, gate_type=None):
+    """Calculate thrust for gate valves using GSL method"""
+    # Convert to imperial units
+    stem_dia_inch = valve.stem_dia_mm * MM_TO_INCH
+    pressure_psi = pressure_bar * BAR_TO_PSI
     
-    # Packing friction force
-    stem_area = math.pi * (valve.stem_dia_mm / 1000 / 2)**2
-    packing_force = stem_area * pressure_bar * 100000 * valve.get_seal_friction()
+    # Calculate bore area (in²)
+    bore_area_in2 = math.pi * (valve.size / 2) ** 2
     
-    # Wedge effect factor
-    wedge_factor = 1.5 if valve.type == "Gate" else 1.0
+    # Get valve factor C
+    C = get_valve_factor("Gate", media_type, temperature_c, gate_type)
     
-    # Temperature factor
-    temp_factor = 1.0
-    if temperature_c > 200:
-        temp_factor = 1.0 + (temperature_c - 200) * 0.0015
+    # Seating thrust (D)
+    seating_thrust_lbf = bore_area_in2 * pressure_psi * C
     
-    return (dp_force * wedge_factor + packing_force) * temp_factor
+    # Packing friction thrust (E)
+    packing_thrust_lbf = 2000 * stem_dia_inch
+    
+    # Piston effect (F)
+    piston_effect_lbf = 0.785 * (stem_dia_inch ** 2) * pressure_psi
+    
+    # Total thrust (G)
+    total_thrust_lbf = seating_thrust_lbf + packing_thrust_lbf + piston_effect_lbf
+    
+    # Convert to Newtons
+    return total_thrust_lbf * LBF_TO_N
 
-def calculate_valve_torque_thrust(valve, pressure_bar, temperature_c):
+def calculate_globe_valve_thrust(valve, pressure_bar, temperature_c, media_type):
+    """Calculate thrust for globe valves using GSL method"""
+    # Convert to imperial units
+    stem_dia_inch = valve.stem_dia_mm * MM_TO_INCH
+    pressure_psi = pressure_bar * BAR_TO_PSI
+    
+    # Calculate bore area (in²)
+    bore_area_in2 = math.pi * (valve.size / 2) ** 2
+    
+    # Get valve factor C (size-based)
+    C = 1.5 if valve.size < 2 else 1.15
+    
+    # Seating thrust (D)
+    seating_thrust_lbf = bore_area_in2 * pressure_psi * C
+    
+    # Packing friction thrust (E)
+    packing_thrust_lbf = 2000 * stem_dia_inch
+    
+    # Total thrust (G) - no piston effect for globe valves
+    total_thrust_lbf = seating_thrust_lbf + packing_thrust_lbf
+    
+    # Convert to Newtons
+    return total_thrust_lbf * LBF_TO_N
+
+def calculate_valve_torque_thrust(valve, pressure_bar, temperature_c, media_type, gate_type=None):
     """Calculate torque or thrust based on valve type"""
     if valve.type == "Ball" or valve.type == "Plug":
         return calculate_ball_valve_torque(valve, pressure_bar, temperature_c), "Torque (Nm)"
     elif valve.type == "Butterfly":
         return calculate_butterfly_valve_torque(valve, pressure_bar, temperature_c), "Torque (Nm)"
     elif valve.type == "Globe":
-        return calculate_globe_valve_thrust(valve, pressure_bar, temperature_c), "Thrust (N)"
+        thrust = calculate_globe_valve_thrust(valve, pressure_bar, temperature_c, media_type)
+        return thrust, "Thrust (N)"
     elif valve.type == "Gate":
-        return calculate_gate_valve_thrust(valve, pressure_bar, temperature_c), "Thrust (N)"
+        thrust = calculate_gate_valve_thrust(valve, pressure_bar, temperature_c, media_type, gate_type)
+        return thrust, "Thrust (N)"
     elif valve.type == "Diaphragm":
         # Diaphragm valves use thrust but with different calculation
         area = valve.get_area()
@@ -470,13 +517,13 @@ def plot_actuator_comparison(actuators):
     fig.update_layout(barmode='group', height=500)
     return fig
 
-def plot_torque_thrust_vs_pressure(valve, temperature_c, max_pressure):
+def plot_torque_thrust_vs_pressure(valve, temperature_c, max_pressure, media_type, gate_type=None):
     pressures = np.linspace(0, max_pressure, 20)
     values = []
     labels = []
     
     for pressure in pressures:
-        value, value_type = calculate_valve_torque_thrust(valve, pressure, temperature_c)
+        value, value_type = calculate_valve_torque_thrust(valve, pressure, temperature_c, media_type, gate_type)
         values.append(value)
         labels.append(value_type)
     
@@ -622,6 +669,13 @@ def main():
         st.header("Operating Conditions")
         pressure = st.number_input("Operating Pressure (bar)", min_value=0.0, max_value=500.0, value=10.0, step=1.0)
         temperature = st.number_input("Operating Temperature (°C)", min_value=-50.0, max_value=500.0, value=20.0, step=1.0)
+        media_type = st.selectbox("Media Type", MEDIA_TYPES)  # NEW: Media type selection
+        
+        # Gate type selection only for gate valves
+        gate_type = None
+        if "Gate" in selected_valve_name:
+            gate_type = st.selectbox("Gate Type", ["Solid Wedge", "Flexible Wedge"])
+            
         safety_factor = st.selectbox("Safety Factor", list(SAFETY_FACTORS.keys()), index=0)
         supply_type = st.selectbox("Actuator Supply Type", ["Any", "Pneumatic", "Electric", "Hydraulic"])
         
@@ -646,8 +700,10 @@ def main():
         
         if calculate_btn:
             try:
-                # Calculate torque/thrust
-                required_value, value_type = calculate_valve_torque_thrust(selected_valve, pressure, temperature)
+                # Calculate torque/thrust with media_type and gate_type
+                required_value, value_type = calculate_valve_torque_thrust(
+                    selected_valve, pressure, temperature, media_type, gate_type
+                )
                 sf_value = SAFETY_FACTORS[safety_factor]
                 required_with_sf = required_value * sf_value
                 
@@ -658,7 +714,9 @@ def main():
                     "required_with_sf": required_with_sf,
                     "valve": selected_valve,
                     "pressure": pressure,
-                    "temperature": temperature
+                    "temperature": temperature,
+                    "media_type": media_type,
+                    "gate_type": gate_type
                 }
             except Exception as e:
                 st.error(f"Calculation error: {str(e)}")
@@ -680,7 +738,9 @@ def main():
             fig = plot_torque_thrust_vs_pressure(
                 results["valve"], 
                 results["temperature"],
-                min(100, results["valve"].max_pressure)
+                min(100, results["valve"].max_pressure),
+                results["media_type"],
+                results["gate_type"] if "gate_type" in results else None
             )
             st.plotly_chart(fig, use_container_width=True)
             
@@ -692,6 +752,9 @@ def main():
                 st.markdown(f"**Stem Diameter:** {results['valve'].stem_dia_mm} mm")
                 st.markdown(f"**Operating Pressure:** {results['pressure']} bar")
                 st.markdown(f"**Operating Temperature:** {results['temperature']} °C")
+                st.markdown(f"**Media Type:** {results['media_type']}")
+                if results['valve'].type == "Gate" and results.get('gate_type'):
+                    st.markdown(f"**Gate Type:** {results['gate_type']}")
                 st.markdown(f"**Safety Factor:** {results['safety_factor']} ({safety_factor})")
                 
                 if "Torque" in value_type:
@@ -833,8 +896,11 @@ def main():
             op_conditions = [
                 ("Operating Pressure:", f"{st.session_state.results['pressure']} bar"),
                 ("Operating Temperature:", f"{st.session_state.results['temperature']} °C"),
+                ("Media Type:", st.session_state.results["media_type"]),
                 ("Safety Factor:", f"{st.session_state.results['safety_factor']} ({safety_factor})")
             ]
+            if st.session_state.results.get('gate_type'):
+                op_conditions.append(("Gate Type:", st.session_state.results['gate_type']))
             pdf.add_key_value_table(op_conditions)
             
             # Calculation results
