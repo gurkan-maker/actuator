@@ -26,6 +26,8 @@ N_TO_LBF = 0.224809
 NM_TO_LBIN = 8.85075
 KW_TO_HP = 1.34102
 LBF_TO_N = 1 / N_TO_LBF  # Conversion from lbf to N
+INCH_TO_MM = 25.4
+MPA_TO_PSI = 145.038
 
 # Valve types
 VALVE_TYPES = {
@@ -73,12 +75,22 @@ VALVE_FACTORS = {
 # Media types
 MEDIA_TYPES = ["Liquid", "Gas/Steam"]
 
+# Stem material properties (Yield strength in MPa)
+STEM_MATERIALS = {
+    "SS304": {"yield_strength": 205, "density": 8000},
+    "SS316": {"yield_strength": 205, "density": 8000},
+    "Carbon Steel": {"yield_strength": 250, "density": 7850},
+    "Alloy Steel": {"yield_strength": 450, "density": 7800},
+    "Titanium": {"yield_strength": 830, "density": 4500}
+}
+
 # ========================
 # VALVE DATABASE
 # ========================
 class Valve:
     def __init__(self, size_inch, valve_type, pressure_class, seat_material, stem_dia_mm, 
-                 max_pressure_bar, min_pressure_bar, max_temp_c, min_temp_c):
+                 max_pressure_bar, min_pressure_bar, max_temp_c, min_temp_c,
+                 stem_material=None, pitch_dia_mm=None, stroke_mm=None):
         self.size = size_inch
         self.type = valve_type
         self.pressure_class = pressure_class
@@ -88,6 +100,9 @@ class Valve:
         self.min_pressure = min_pressure_bar
         self.max_temp = max_temp_c
         self.min_temp = min_temp_c
+        self.stem_material = stem_material
+        self.pitch_dia_mm = pitch_dia_mm
+        self.stroke_mm = stroke_mm
         
     def get_seal_friction(self):
         return SEAL_FRICTION.get(self.seat_material, 0.1)
@@ -98,14 +113,14 @@ class Valve:
         return math.pi * radius_m**2
 
 VALVE_DATABASE = [
-    Valve(2, "Ball", 600, "PTFE", 20, 100, 0, 200, -20),
-    Valve(4, "Ball", 600, "Metal", 30, 100, 0, 250, -20),
-    Valve(6, "Butterfly", 300, "Elastomer", 40, 40, 0, 150, -10),
-    Valve(8, "Butterfly", 150, "PTFE", 50, 25, 0, 180, -10),
-    Valve(3, "Globe", 900, "Graphite", 25, 150, 0, 350, -50),
-    Valve(6, "Gate", 600, "Graphite", 35, 100, 0, 400, -30),
-    Valve(2, "Plug", 600, "PTFE", 22, 100, 0, 200, -20),
-    Valve(10, "Diaphragm", 150, "Elastomer", 60, 16, 0, 120, -10)
+    Valve(2, "Ball", 600, "PTFE", 20, 100, 0, 200, -20, "SS316", None, None),
+    Valve(4, "Ball", 600, "Metal", 30, 100, 0, 250, -20, "SS316", None, None),
+    Valve(6, "Butterfly", 300, "Elastomer", 40, 40, 0, 150, -10, "Carbon Steel", None, None),
+    Valve(8, "Butterfly", 150, "PTFE", 50, 25, 0, 180, -10, "SS304", None, None),
+    Valve(3, "Globe", 900, "Graphite", 25, 150, 0, 350, -50, "Alloy Steel", 40, 200),
+    Valve(6, "Gate", 600, "Graphite", 35, 100, 0, 400, -30, "Alloy Steel", 45, 300),
+    Valve(2, "Plug", 600, "PTFE", 22, 100, 0, 200, -20, "SS316", None, None),
+    Valve(10, "Diaphragm", 150, "Elastomer", 60, 16, 0, 120, -10, "SS304", 65, 150)
 ]
 
 # ========================
@@ -113,7 +128,8 @@ VALVE_DATABASE = [
 # ========================
 class Actuator:
     def __init__(self, model, manufacturer, torque_nm, thrust_n, max_pressure_bar, 
-                 min_temp_c, max_temp_c, power_kw, supply_type, weight_kg, price_usd):
+                 min_temp_c, max_temp_c, power_kw, supply_type, weight_kg, price_usd,
+                 stroke_mm=None, speed_mm_s=None):
         self.model = model
         self.manufacturer = manufacturer
         self.torque = torque_nm
@@ -125,24 +141,32 @@ class Actuator:
         self.supply = supply_type
         self.weight = weight_kg
         self.price = price_usd
+        self.stroke = stroke_mm
+        self.speed = speed_mm_s
         
     def get_torque_lbin(self):
         return self.torque * NM_TO_LBIN
     
     def get_thrust_lbf(self):
         return self.thrust * N_TO_LBF
+    
+    def get_run_time(self, stroke_mm):
+        """Calculate run time for given stroke"""
+        if self.speed and stroke_mm:
+            return stroke_mm / self.speed
+        return None
 
 ACTUATOR_DATABASE = [
-    Actuator("SR-100", "Rotork", 1000, 0, 100, -30, 120, 0.5, "Pneumatic", 25, 3500),
-    Actuator("SR-500", "Rotork", 5000, 0, 100, -30, 120, 1.0, "Pneumatic", 45, 5500),
-    Actuator("IQT-300", "Rotork", 3000, 0, 100, -40, 150, 0.75, "Electric", 40, 6500),
-    Actuator("SMC-200", "Emerson", 2000, 0, 100, -20, 100, 0.6, "Pneumatic", 30, 4200),
-    Actuator("SMC-800", "Emerson", 8000, 0, 100, -20, 100, 1.5, "Pneumatic", 65, 7800),
-    Actuator("F10", "Flowserve", 0, 15000, 150, -50, 200, 1.2, "Hydraulic", 85, 9500),
-    Actuator("F25", "Flowserve", 0, 25000, 200, -50, 250, 2.0, "Hydraulic", 120, 12500),
-    Actuator("E-200", "AUMA", 2000, 0, 100, -30, 120, 0.8, "Electric", 38, 5800),
-    Actuator("E-1000", "AUMA", 10000, 0, 100, -30, 120, 2.5, "Electric", 95, 11200),
-    Actuator("H-150", "Honeywell", 0, 20000, 180, -40, 180, 1.8, "Hydraulic", 100, 10500)
+    Actuator("SR-100", "Rotork", 1000, 0, 100, -30, 120, 0.5, "Pneumatic", 25, 3500, None, None),
+    Actuator("SR-500", "Rotork", 5000, 0, 100, -30, 120, 1.0, "Pneumatic", 45, 5500, None, None),
+    Actuator("IQT-300", "Rotork", 3000, 0, 100, -40, 150, 0.75, "Electric", 40, 6500, None, None),
+    Actuator("SMC-200", "Emerson", 2000, 0, 100, -20, 100, 0.6, "Pneumatic", 30, 4200, None, None),
+    Actuator("SMC-800", "Emerson", 8000, 0, 100, -20, 100, 1.5, "Pneumatic", 65, 7800, None, None),
+    Actuator("F10", "Flowserve", 0, 15000, 150, -50, 200, 1.2, "Hydraulic", 85, 9500, 200, 10),
+    Actuator("F25", "Flowserve", 0, 25000, 200, -50, 250, 2.0, "Hydraulic", 120, 12500, 300, 8),
+    Actuator("E-200", "AUMA", 2000, 0, 100, -30, 120, 0.8, "Electric", 38, 5800, None, None),
+    Actuator("E-1000", "AUMA", 10000, 0, 100, -30, 120, 2.5, "Electric", 95, 11200, None, None),
+    Actuator("H-150", "Honeywell", 0, 20000, 180, -40, 180, 1.8, "Hydraulic", 100, 10500, 250, 12)
 ]
 
 # ========================
@@ -269,6 +293,43 @@ def calculate_valve_torque_thrust(valve, pressure_bar, temperature_c, media_type
         return 0, "Unknown"
 
 # ========================
+# STEM ANALYSIS MODULE
+# ========================
+def calculate_stem_stress(valve, thrust_N):
+    """Calculate stem stress and check against material yield strength"""
+    if not valve.stem_material:
+        return None, None, None, "No stem material specified"
+    
+    # Get stem material properties
+    material_props = STEM_MATERIALS.get(valve.stem_material)
+    if not material_props:
+        return None, None, None, "Unknown stem material"
+    
+    # Calculate cross-sectional area (m²)
+    stem_radius_m = (valve.stem_dia_mm / 1000) / 2
+    area = math.pi * stem_radius_m ** 2
+    
+    # Stress in Pa (thrust_N / area)
+    stress = thrust_N / area
+    
+    # Yield strength in Pa (convert from MPa to Pa: MPa * 1e6)
+    yield_strength = material_props["yield_strength"] * 1e6
+    
+    # Safety factor (we'll use 1.5 for stem)
+    allowable_stress = yield_strength / 1.5
+    
+    # Check if stress is below allowable
+    sufficient = stress < allowable_stress
+    
+    return stress, yield_strength, allowable_stress, sufficient
+
+def calculate_actuator_run_time(actuator, stroke_mm):
+    """Calculate actuator run time based on speed and required stroke"""
+    if not actuator.speed or not stroke_mm:
+        return None
+    return stroke_mm / actuator.speed
+
+# ========================
 # ACTUATOR SELECTION LOGIC
 # ========================
 def find_suitable_actuators(required_value, value_type, valve, safety_factor, supply_type=None):
@@ -303,10 +364,17 @@ def find_suitable_actuators(required_value, value_type, valve, safety_factor, su
         if capability >= required_value * safety_factor:
             # Calculate margin
             margin = (capability / (required_value * safety_factor) - 1) * 100
+            
+            # Calculate run time for linear actuators if stroke is provided
+            run_time = None
+            if valve.stroke_mm and valve.type in ["Globe", "Gate", "Diaphragm"]:
+                run_time = actuator.get_run_time(valve.stroke_mm)
+                
             suitable_actuators.append({
                 "actuator": actuator,
                 "capability": capability,
-                "margin": margin
+                "margin": margin,
+                "run_time": run_time
             })
     
     # Sort by capability (ascending) to get the most economical first
@@ -548,6 +616,53 @@ def plot_torque_thrust_vs_pressure(valve, temperature_c, max_pressure, media_typ
     
     return fig
 
+def plot_stem_stress_vs_thrust(valve, max_thrust):
+    """Plot stem stress vs thrust with material limits"""
+    if not valve.stem_material or not valve.stem_dia_mm:
+        return None
+        
+    thrusts = np.linspace(0, max_thrust, 20)
+    stresses = []
+    
+    # Calculate stem area (m²)
+    stem_radius_m = (valve.stem_dia_mm / 1000) / 2
+    area = math.pi * stem_radius_m ** 2
+    
+    for thrust in thrusts:
+        stresses.append(thrust / area / 1e6)  # Convert to MPa
+    
+    # Get material properties
+    material_props = STEM_MATERIALS.get(valve.stem_material, {})
+    yield_strength = material_props.get("yield_strength", 0)
+    allowable_stress = yield_strength / 1.5 if yield_strength else 0
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=thrusts, 
+        y=stresses, 
+        mode='lines+markers',
+        name='Stem Stress',
+        line=dict(width=3, color='blue')
+    ))
+    
+    if yield_strength:
+        fig.add_hline(y=yield_strength, line_dash="dot", 
+                      annotation_text=f"Yield Strength: {yield_strength} MPa", 
+                      line_color="red")
+        fig.add_hline(y=allowable_stress, line_dash="dash", 
+                      annotation_text=f"Allowable Stress: {allowable_stress:.1f} MPa", 
+                      line_color="orange")
+    
+    fig.update_layout(
+        title=f"Stem Stress Analysis ({valve.stem_material})",
+        xaxis_title="Thrust (N)",
+        yaxis_title="Stress (MPa)",
+        height=400,
+        template='plotly_white'
+    )
+    
+    return fig
+
 # ========================
 # STREAMLIT APPLICATION
 # ========================
@@ -624,6 +739,24 @@ def main():
         .status-red {
             background-color: #f8d7da;
         }
+        .stem-ok {
+            background-color: #d4edda;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 5px solid #28a745;
+        }
+        .stem-warning {
+            background-color: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 5px solid #ffc107;
+        }
+        .stem-danger {
+            background-color: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 5px solid #dc3545;
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -645,7 +778,7 @@ def main():
             st.image("https://via.placeholder.com/100x100?text=LOGO", width=100)
     with col2:
         st.title("Valve Torque/Thrust Calculator")
-        st.markdown("**Actuator Sizing and Selection Tool**")
+        st.markdown("**Actuator Sizing and Stem Analysis Tool**")
     
     with st.sidebar:
         st.header("VASTAŞ Logo")
@@ -661,19 +794,48 @@ def main():
         else:
             st.image("https://via.placeholder.com/300x100?text=VASTAŞ+Logo", use_container_width=True)
         
-        st.header("Valve Selection")
-        valve_options = {f"{valve.size}\" {valve.type} (Class {valve.pressure_class})": valve for valve in VALVE_DATABASE}
-        selected_valve_name = st.selectbox("Select Valve", list(valve_options.keys()))
-        selected_valve = valve_options[selected_valve_name]
+        st.header("Valve Selection Method")
+        valve_selection_method = st.radio("", ["Select from Database", "Create Custom Valve"])
+        
+        if valve_selection_method == "Select from Database":
+            st.header("Valve Selection")
+            valve_options = {f"{valve.size}\" {valve.type} (Class {valve.pressure_class})": valve for valve in VALVE_DATABASE}
+            selected_valve_name = st.selectbox("Select Valve", list(valve_options.keys()))
+            selected_valve = valve_options[selected_valve_name]
+        else:
+            st.header("Custom Valve Parameters")
+            valve_type = st.selectbox("Valve Type", list(VALVE_TYPES.keys()))
+            size = st.number_input("Valve Size (inches)", min_value=0.5, max_value=48.0, value=6.0, step=0.5)
+            pressure_class = st.selectbox("Pressure Class", [150, 300, 600, 900, 1500, 2500])
+            seat_material = st.selectbox("Seat Material", list(SEAL_FRICTION.keys()))
+            stem_dia = st.number_input("Stem Diameter (mm)", min_value=5.0, max_value=100.0, value=25.0, step=1.0)
+            max_pressure = st.number_input("Max Pressure (bar)", min_value=1.0, max_value=500.0, value=100.0, step=1.0)
+            min_pressure = st.number_input("Min Pressure (bar)", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
+            max_temp = st.number_input("Max Temperature (°C)", min_value=-50.0, max_value=500.0, value=200.0, step=10.0)
+            min_temp = st.number_input("Min Temperature (°C)", min_value=-50.0, max_value=100.0, value=-20.0, step=10.0)
+            stem_material = st.selectbox("Stem Material", list(STEM_MATERIALS.keys()))
+            
+            # Additional parameters for linear valves
+            pitch_dia = None
+            stroke = None
+            if valve_type in ["Globe", "Gate", "Diaphragm"]:
+                pitch_dia = st.number_input("Pitch Diameter (mm)", min_value=5.0, max_value=100.0, value=30.0, step=1.0)
+                stroke = st.number_input("Stroke (mm)", min_value=10.0, max_value=1000.0, value=200.0, step=10.0)
+            
+            selected_valve = Valve(
+                size, valve_type, pressure_class, seat_material, stem_dia,
+                max_pressure, min_pressure, max_temp, min_temp,
+                stem_material, pitch_dia, stroke
+            )
         
         st.header("Operating Conditions")
         pressure = st.number_input("Operating Pressure (bar)", min_value=0.0, max_value=500.0, value=10.0, step=1.0)
         temperature = st.number_input("Operating Temperature (°C)", min_value=-50.0, max_value=500.0, value=20.0, step=1.0)
-        media_type = st.selectbox("Media Type", MEDIA_TYPES)  # NEW: Media type selection
+        media_type = st.selectbox("Media Type", MEDIA_TYPES)
         
         # Gate type selection only for gate valves
         gate_type = None
-        if "Gate" in selected_valve_name:
+        if selected_valve.type == "Gate":
             gate_type = st.selectbox("Gate Type", ["Solid Wedge", "Flexible Wedge"])
             
         safety_factor = st.selectbox("Safety Factor", list(SAFETY_FACTORS.keys()), index=0)
@@ -689,11 +851,17 @@ def main():
         st.markdown(f"**Pressure Class:** {selected_valve.pressure_class}")
         st.markdown(f"**Seat Material:** {selected_valve.seat_material}")
         st.markdown(f"**Stem Diameter:** {selected_valve.stem_dia_mm} mm")
+        if selected_valve.stem_material:
+            st.markdown(f"**Stem Material:** {selected_valve.stem_material}")
+        if selected_valve.pitch_dia_mm:
+            st.markdown(f"**Pitch Diameter:** {selected_valve.pitch_dia_mm} mm")
+        if selected_valve.stroke_mm:
+            st.markdown(f"**Stroke:** {selected_valve.stroke_mm} mm")
         st.markdown(f"**Max Pressure:** {selected_valve.max_pressure} bar")
         st.markdown(f"**Temp Range:** {selected_valve.min_temp}°C to {selected_valve.max_temp}°C")
     
     # Main content area
-    tab1, tab2 = st.tabs(["Calculation", "Actuator Selection"])
+    tab1, tab2, tab3 = st.tabs(["Calculation", "Actuator Selection", "Stem Analysis"])
     
     with tab1:
         st.subheader("Torque/Thrust Calculation")
@@ -800,6 +968,7 @@ def main():
                     act = actuator["actuator"]
                     capability = actuator["capability"]
                     margin = actuator["margin"]
+                    run_time = actuator["run_time"]
                     
                     # Determine status
                     if margin > 50:
@@ -812,6 +981,10 @@ def main():
                         status = "Minimal margin"
                         status_class = "status-red"
                     
+                    run_time_str = "-"
+                    if run_time is not None:
+                        run_time_str = f"{run_time:.1f} s"
+                    
                     actuator_data.append([
                         f"{act.manufacturer} {act.model}",
                         act.supply,
@@ -820,7 +993,8 @@ def main():
                         f"{act.weight} kg",
                         f"${act.price}",
                         f"{margin:.1f}%",
-                        status
+                        status,
+                        run_time_str
                     ])
                 
                 # Create HTML table with styling
@@ -836,6 +1010,7 @@ def main():
                             <th>Price</th>
                             <th>Margin</th>
                             <th>Status</th>
+                            <th>Run Time</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -863,6 +1038,56 @@ def main():
         else:
             st.info("Perform a calculation first to see actuator recommendations")
     
+    with tab3:
+        st.subheader("Stem Analysis")
+        
+        if st.session_state.results and st.session_state.results["valve"].stem_material:
+            valve = st.session_state.results["valve"]
+            required_thrust = st.session_state.results["required_with_sf"]
+            
+            # Only perform analysis for thrust-based valves
+            if "Thrust" in st.session_state.results["value_type"]:
+                stress, yield_strength, allowable_stress, sufficient = calculate_stem_stress(valve, required_thrust)
+                
+                if stress is not None:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Calculated Stress", f"{stress/1e6:.1f}", "MPa")
+                    with col2:
+                        st.metric("Material Yield Strength", f"{yield_strength}", "MPa")
+                    with col3:
+                        st.metric("Allowable Stress", f"{allowable_stress/1e6:.1f}", "MPa")
+                    
+                    # Display stem status
+                    if sufficient:
+                        st.markdown(f'<div class="stem-ok">✅ Stem is sufficient (Safety factor: {allowable_stress/stress:.2f})</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="stem-danger">❌ Stem is insufficient (Safety factor: {allowable_stress/stress:.2f})</div>', unsafe_allow_html=True)
+                    
+                    st.subheader("Stem Stress Visualization")
+                    fig = plot_stem_stress_vs_thrust(valve, required_thrust * 1.5)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.subheader("Recommendations")
+                    if sufficient:
+                        st.success("The stem diameter and material are adequate for the calculated thrust.")
+                    else:
+                        st.warning("The stem diameter or material is insufficient. Consider:")
+                        st.markdown("- Increasing stem diameter")
+                        st.markdown("- Using a stronger stem material")
+                        st.markdown("- Reducing operating pressure")
+                        
+                    st.info(f"**Stem Stress Formula:** σ = F / A")
+                    st.info(f"**Where:**")
+                    st.info(f"- F = Required thrust with safety factor ({required_thrust:.1f} N)")
+                    st.info(f"- A = Stem cross-sectional area ({math.pi * (valve.stem_dia_mm/2000)**2 * 1e6:.2f} mm²)")
+                else:
+                    st.warning("Stem analysis not available for the selected valve")
+            else:
+                st.info("Stem analysis is only applicable for thrust-based valves (Globe, Gate, Diaphragm)")
+        else:
+            st.info("Perform a calculation with a thrust-based valve to see stem analysis")
+    
     if export_btn and st.session_state.results:
         try:
             # Generate PDF report
@@ -872,7 +1097,7 @@ def main():
             # Cover page
             pdf.cover_page(
                 title="VALVE ACTUATOR SIZING REPORT",
-                subtitle="Torque/Thrust Calculation",
+                subtitle="Torque/Thrust Calculation with Stem Analysis",
                 project_info=f"Prepared by VASTAŞ Engineering Department"
             )
             
@@ -886,9 +1111,14 @@ def main():
                 ("Pressure Class:", str(valve.pressure_class)),
                 ("Seat Material:", valve.seat_material),
                 ("Stem Diameter:", f"{valve.stem_dia_mm} mm"),
+                ("Stem Material:", valve.stem_material if valve.stem_material else "Not specified"),
                 ("Max Pressure:", f"{valve.max_pressure} bar"),
                 ("Temperature Range:", f"{valve.min_temp}°C to {valve.max_temp}°C")
             ]
+            if valve.pitch_dia_mm:
+                valve_details.append(("Pitch Diameter:", f"{valve.pitch_dia_mm} mm"))
+            if valve.stroke_mm:
+                valve_details.append(("Stroke:", f"{valve.stroke_mm} mm"))
             pdf.add_key_value_table(valve_details)
             
             # Operating conditions
@@ -911,6 +1141,22 @@ def main():
                 ("With Safety Factor:", f"{st.session_state.results['required_with_sf']:.1f} {value_type}")
             ]
             pdf.add_key_value_table(calc_results)
+            
+            # Stem analysis (if applicable)
+            if "Thrust" in value_type and valve.stem_material:
+                stress, yield_strength, allowable_stress, sufficient = calculate_stem_stress(
+                    valve, st.session_state.results["required_with_sf"]
+                )
+                if stress:
+                    pdf.chapter_title('Stem Analysis')
+                    stem_results = [
+                        ("Calculated Stress:", f"{stress/1e6:.1f} MPa"),
+                        ("Material Yield Strength:", f"{yield_strength} MPa"),
+                        ("Allowable Stress:", f"{allowable_stress/1e6:.1f} MPa"),
+                        ("Sufficient:", "Yes" if sufficient else "No"),
+                        ("Safety Factor:", f"{allowable_stress/stress:.2f}")
+                    ]
+                    pdf.add_key_value_table(stem_results)
             
             # Actuator recommendations
             suitable_actuators = find_suitable_actuators(
